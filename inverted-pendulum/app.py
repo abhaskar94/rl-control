@@ -20,7 +20,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Button
 
 from env import Pendulum
-from controllers import OpenLoopController, PlaceholderController
+from controllers import OpenLoopController, PIDController, PlaceholderController
 
 # ── palette (kept here because it's presentation, not physics) ──────────────
 BG, PANEL = "#f7f8fa", "#ffffff"
@@ -35,13 +35,22 @@ class App:
     """Owns the plant, the controllers, and all the drawing."""
 
     def __init__(self) -> None:
-        self.env = Pendulum()
-        # One controller per mode. Open-loop is real; the rest are placeholders for now.
+        # Torque limit raised well above the ±3 swing-up-challenge value so high-gain PID has
+        # the authority to drive straight to upright without saturating. NOTE: this makes
+        # swing-up easy for *every* controller — revisit when the RL agent lands (milestone 3).
+        self.env = Pendulum(tau_max=150.0)
+        # One controller per mode. Open-loop and PID are real; RL is a placeholder for now.
         self.open_loop = OpenLoopController(torque=1.5)
         self.controllers = {
             "Open-loop": self.open_loop,
-            "PID": PlaceholderController("PID"),
+            "PID": PIDController(kp=40.0, ki=1.0, kd=12.0, dt=self.env.dt),
             "RL agent": PlaceholderController("RL agent"),
+        }
+        # A one-line explanation shown under the stage for each mode.
+        self.hints = {
+            "Open-loop": "Hold  ←  /  →  to apply torque",
+            "PID": "High-gain PID drives straight to upright and holds it",
+            "RL agent": "placeholder — coming soon",
         }
         self.mode = "Open-loop"
         self.state = self.env.reset()
@@ -83,7 +92,7 @@ class App:
         self.bob, = self.ax.plot([], [], "o", ms=20, color=AMBER, zorder=4,
                                  markeredgecolor="#b45309")
         self.torque_arrow = None
-        self.hint = self.ax.text(0, -1.24, "Hold  ←  /  →  to apply torque",
+        self.hint = self.ax.text(0, -1.24, self.hints[self.mode],
                                  color=MUTED, fontsize=9, ha="center")
 
         # Angle trace (bottom-right).
@@ -113,8 +122,8 @@ class App:
         self.reset_btn.on_clicked(lambda _e: self.reset())
 
         # Status panel.
-        self.status = self.fig.text(0.66, 0.62, "", color=INK, fontsize=10,
-                                     family="monospace", va="top", linespacing=1.8)
+        self.status = self.fig.text(0.66, 0.70, "", color=INK, fontsize=10,
+                                     family="monospace", va="top", linespacing=1.6)
 
         self._refresh_buttons()
 
@@ -125,6 +134,7 @@ class App:
     def set_mode(self, name: str) -> None:
         self.mode = name
         self.controller.reset()
+        self.hint.set_text(self.hints[name])
         self._refresh_buttons()
 
     def reset(self) -> None:
@@ -152,6 +162,9 @@ class App:
     # ── animation ───────────────────────────────────────────────────────────
     def update(self, _frame):
         tau = self.controller.action(self.state)
+        # The plant saturates torque to [-tau_max, tau_max]; show what is actually applied.
+        applied = float(np.clip(tau, -self.env.tau_max, self.env.tau_max))
+        saturated = abs(tau) > self.env.tau_max
         self.state = self.env.step(tau)
         theta, theta_dot = self.state
 
@@ -163,7 +176,7 @@ class App:
 
         if self.torque_arrow is not None:
             self.torque_arrow.remove()
-        length = 0.35 * max(-1.0, min(1.0, tau / self.env.tau_max))
+        length = 0.35 * (applied / self.env.tau_max)
         self.torque_arrow = self.ax.arrow(0, 0, length, 0, width=0.02,
                                           head_width=0.07, head_length=0.05,
                                           color=RED, alpha=0.85, zorder=2)
@@ -174,11 +187,19 @@ class App:
         self.theta_line.set_data(range(len(self.theta_history)), self.theta_history)
 
         note = "  (placeholder — coming soon)" if self.is_placeholder else ""
+        tau_flag = "  (saturated)" if saturated else ""
+        # Show the PID gains when PID is the active mode.
+        if isinstance(self.controller, PIDController):
+            c = self.controller
+            gains = f"P {c.kp:g}    I {c.ki:g}    D {c.kd:g}\n"
+        else:
+            gains = ""
         self.status.set_text(
             f"mode   {self.mode}{note}\n\n"
+            f"{gains}"
             f"θ      {theta:+.3f} rad\n"
             f"θ̇      {theta_dot:+.3f} rad/s\n"
-            f"τ      {tau:+.3f} N·m")
+            f"τ      {applied:+.3f} N·m{tau_flag}")
         self.status.set_color(MUTED if self.is_placeholder else INK)
 
         return self.arm, self.bob, self.torque_arrow, self.theta_line

@@ -22,9 +22,14 @@ that is the only thing that keeps the comparison honest.
 
 Canonical dynamics (defined once, in `env/pendulum.py`):
 - `theta_ddot = (g/L)·sin(theta) + tau/(m·L²) − c·theta_dot`
-- constants: `g=9.81, L=1, m=1, dt=0.02, c=0.001`, torque limit `TAU_MAX=3.0`
+- constants: `g=9.81, L=1, m=1, dt=0.02, c=0.001`.
+- **torque limit is a plant parameter** (`tau_max`): `env` defaults to a tight `3.0` (the hard
+  swing-up challenge), but `app.py` currently raises it to `150` so high-gain PID has the
+  authority to drive straight to upright without saturating. This makes swing-up easy for every
+  controller — **revisit the shared limit when the RL agent lands** so the comparison stays
+  meaningful.
 - **convention: `theta=0` is upright, `theta=±pi` is hanging down**; the task is swing-up from
-  hanging, so PID (energy-blind) visibly fails and the RL agent succeeds.
+  hanging.
 
 ## The controller contract
 
